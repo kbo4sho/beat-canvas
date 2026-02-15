@@ -1015,8 +1015,8 @@ document.getElementById('btnRec').addEventListener('click', () => {
 
 // --- CLAUDE AI COMPOSITION ---
 const claudeAI = {
-  enabled: localStorage.getItem('aiComposeEnabled') !== 'false',
-  token: localStorage.getItem('aiGatewayToken') || '',
+  enabled: /localhost|192\.168|127\.0/.test(location.hostname),
+  token: '213e438e21c126522742c945fc4ceea2c3df9aa3aa63e66f',
   callsRemaining: 15,
   lastCallTime: 0,
   lastCallSweep: -99,
@@ -1041,7 +1041,7 @@ const claudeAI = {
   },
 
   async callClaude() {
-    if (!this.enabled || !this.token || this.callsRemaining <= 0 || this.thinking) return false;
+    if (!this.enabled || this.callsRemaining <= 0 || this.thinking) return false;
     const now = Date.now();
     if (now - this.lastCallTime < 30000) return false;
     if (this.dotsSinceLastCall === 0) return false;
