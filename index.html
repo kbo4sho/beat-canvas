@@ -19,6 +19,23 @@ canvas { display: block; width: 100%; height: 100%; }
 #tools { position: fixed; top: 16px; right: 16px; display: flex; gap: 8px; z-index: 10; opacity: 0.4; transition: opacity 0.3s; }
 #tools:hover { opacity: 1; }
 #tools button { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; width: 36px; height: 36px; font-size: 16px; cursor: pointer; color: #fff; }
+#aiIndicator { position: fixed; top: 16px; left: 16px; z-index: 10; font-size: 20px; opacity: 0; transition: opacity 0.3s; pointer-events: none; }
+#aiIndicator.thinking { opacity: 1; animation: aiPulse 1s ease-in-out infinite; }
+@keyframes aiPulse { 0%,100% { opacity: 0.5; transform: scale(1); } 50% { opacity: 1; transform: scale(1.2); } }
+#aiToast { position: fixed; top: 60px; left: 50%; transform: translateX(-50%); z-index: 20; background: rgba(60,80,200,0.8); color: #fff; padding: 8px 16px; border-radius: 20px; font: 14px -apple-system, sans-serif; opacity: 0; transition: opacity 0.3s; pointer-events: none; }
+#settingsOverlay { position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center; }
+#settingsOverlay.open { display: flex; }
+#settingsPanel { background: #1a1a2e; border: 1px solid rgba(255,255,255,0.15); border-radius: 12px; padding: 24px; max-width: 340px; width: 90%; color: #ccc; font: 14px -apple-system, sans-serif; }
+#settingsPanel h3 { margin: 0 0 16px; color: #fff; font-size: 16px; }
+#settingsPanel label { display: block; margin: 12px 0 4px; font-size: 12px; opacity: 0.7; }
+#settingsPanel input[type="text"] { width: 100%; padding: 8px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; color: #fff; font-size: 13px; }
+#settingsPanel .toggle-row { display: flex; align-items: center; justify-content: space-between; margin: 12px 0; }
+#settingsPanel .toggle { width: 40px; height: 22px; background: rgba(255,255,255,0.15); border-radius: 11px; position: relative; cursor: pointer; transition: background 0.2s; }
+#settingsPanel .toggle.on { background: rgba(80,120,255,0.6); }
+#settingsPanel .toggle::after { content: ''; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; background: #fff; border-radius: 50%; transition: transform 0.2s; }
+#settingsPanel .toggle.on::after { transform: translateX(18px); }
+#settingsPanel .info { font-size: 11px; opacity: 0.5; margin-top: 4px; }
+#settingsPanel .close-btn { margin-top: 16px; width: 100%; padding: 8px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; color: #fff; cursor: pointer; font-size: 13px; }
 </style>
 </head>
 <body>
@@ -33,6 +50,23 @@ canvas { display: block; width: 100%; height: 100%; }
 <div id="tools">
   <button id="btnSnap">📷</button>
   <button id="btnRec">🎵</button>
+  <button id="btnSettings">⚙️</button>
+</div>
+<div id="aiIndicator">🧠</div>
+<div id="aiToast">✨ AI composed</div>
+<div id="settingsOverlay">
+  <div id="settingsPanel">
+    <h3>⚙️ Settings</h3>
+    <label>Gateway Token</label>
+    <input type="text" id="aiToken" placeholder="Paste your OpenClaw gateway token" autocomplete="off">
+    <div class="info">Required for Claude AI composition. Get from OpenClaw gateway.</div>
+    <div class="toggle-row">
+      <span>AI Compose</span>
+      <div class="toggle on" id="aiToggle"></div>
+    </div>
+    <div class="info" id="aiCallsInfo">AI calls: 15/15 remaining</div>
+    <button class="close-btn" id="settingsClose">Close</button>
+  </div>
 </div>
 <script>
 (function() {
@@ -678,6 +712,8 @@ function draw(timestamp) {
       if (dots.filter(d => !d.removing).length > 0) {
         generateGrowth();
       }
+      // Claude AI composition check
+      claudeAI.onSweepComplete();
     }
     sweepAngle -= Math.PI * 2;
   }
@@ -880,6 +916,7 @@ function handleStart(px, py) {
   dragDots = 0;
 
   if (!hitDot) {
+    claudeAI.onUserDot();
     // Consolidation: check if tapping near an existing dot (within 15px)
     const nearbyDot = dots.find(d => {
       if (d.removing) return false;
@@ -974,6 +1011,154 @@ document.getElementById('btnRec').addEventListener('click', () => {
   mediaRecorder.start();
   // Auto-stop after one loop
   setTimeout(() => { if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop(); }, LOOP_DURATION * 1000);
+});
+
+// --- CLAUDE AI COMPOSITION ---
+const claudeAI = {
+  enabled: localStorage.getItem('aiComposeEnabled') !== 'false',
+  token: localStorage.getItem('aiGatewayToken') || '',
+  callsRemaining: 15,
+  lastCallTime: 0,
+  lastCallSweep: -99,
+  dotsSinceLastCall: 0,
+  thinking: false,
+
+  getCanvasState() {
+    const active = dots.filter(d => !d.removing);
+    return {
+      bpm: BPM,
+      key: 'C',
+      scale: 'minor pentatonic',
+      style: currentStyle.charAt(0).toUpperCase() + currentStyle.slice(1),
+      dots: active.map(d => ({
+        angle: Math.round((((d.angle + Math.PI) / (Math.PI * 2)) * 360) * 100) / 100,
+        distance: Math.round(d.normDist * 100) / 100,
+        zone: getSynthZone(d.normDist)
+      })),
+      totalBeats: 16,
+      beatAngle: 22.5
+    };
+  },
+
+  async callClaude() {
+    if (!this.enabled || !this.token || this.callsRemaining <= 0 || this.thinking) return false;
+    const now = Date.now();
+    if (now - this.lastCallTime < 30000) return false;
+    if (this.dotsSinceLastCall === 0) return false;
+
+    this.thinking = true;
+    this.lastCallTime = now;
+    this.lastCallSweep = sweepCount;
+    this.dotsSinceLastCall = 0;
+    document.getElementById('aiIndicator').classList.add('thinking');
+
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+
+      const resp = await fetch('http://localhost:18789/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this.token },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: 'anthropic/claude-sonnet-4-5',
+          messages: [
+            { role: 'system', content: 'You are a music composition AI for an interactive circular canvas instrument.\nThe canvas is a circle where angle = time position (0-360° = 4 bars, 16 beats) and distance from center = pitch (0=low bass, 1=high sparkle).\n\nGiven the current dot positions, suggest 3-6 new dots that would make the composition sound better. Consider:\n- Rhythmic interest (don\'t just fill every beat — leave space)\n- Harmonic complement (bass under melody, harmony next to lone notes)\n- Musical phrasing (create call-and-response, tension-resolution)\n- Don\'t duplicate existing dot positions\n\nRespond with ONLY a JSON array of new dots:\n[{"angle": 67.5, "distance": 0.4, "zone": "mid"}, ...]\n\nzone must be "bass" (distance 0-0.33), "mid" (0.33-0.66), or "sparkle" (0.66-1.0).\nAngles should snap to multiples of 5.625 (16th notes).' },
+            { role: 'user', content: JSON.stringify(this.getCanvasState()) }
+          ],
+          max_tokens: 300,
+          temperature: 0.8
+        })
+      });
+      clearTimeout(timeout);
+
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const data = await resp.json();
+      const content = data.choices?.[0]?.message?.content || '';
+      
+      // Extract JSON array from response
+      const match = content.match(/\[[\s\S]*\]/);
+      if (!match) throw new Error('No JSON array');
+      const newDots = JSON.parse(match[0]);
+      if (!Array.isArray(newDots) || newDots.length === 0 || newDots.length > 8) throw new Error('Invalid array');
+
+      // Validate and add dots
+      let added = 0;
+      newDots.forEach(nd => {
+        if (typeof nd.angle !== 'number' || typeof nd.distance !== 'number') return;
+        const angleDeg = Math.max(0, Math.min(360, nd.angle));
+        const dist = Math.max(0.05, Math.min(0.95, nd.distance));
+        const angleRad = (angleDeg / 360) * Math.PI * 2 - Math.PI;
+        
+        // Check zone consistency
+        const zone = dist < 0.33 ? 'bass' : dist < 0.66 ? 'mid' : 'sparkle';
+        
+        // Add with AI visual treatment (blue tint via isAI, smaller size)
+        const dot = addGrowthDot(angleRad, dist, true);
+        if (dot) {
+          dot.size = Math.max(4, dot.size * 0.8); // slightly smaller
+          added++;
+        }
+      });
+
+      if (added > 0) {
+        this.callsRemaining--;
+        this.updateUI();
+        // Show toast
+        const toast = document.getElementById('aiToast');
+        toast.style.opacity = '1';
+        setTimeout(() => { toast.style.opacity = '0'; }, 2000);
+      }
+
+      this.thinking = false;
+      document.getElementById('aiIndicator').classList.remove('thinking');
+      return true;
+    } catch (e) {
+      this.thinking = false;
+      document.getElementById('aiIndicator').classList.remove('thinking');
+      return false;
+    }
+  },
+
+  onSweepComplete() {
+    if (sweepCount > 0 && sweepCount % 4 === 0 && sweepCount !== this.lastCallSweep) {
+      this.callClaude(); // async, non-blocking
+    }
+  },
+
+  onUserDot() {
+    this.dotsSinceLastCall++;
+  },
+
+  updateUI() {
+    document.getElementById('aiCallsInfo').textContent = 'AI calls: ' + this.callsRemaining + '/15 remaining';
+    const toggle = document.getElementById('aiToggle');
+    toggle.classList.toggle('on', this.enabled);
+  }
+};
+
+// Settings UI
+document.getElementById('btnSettings').addEventListener('click', (e) => {
+  e.stopPropagation();
+  document.getElementById('settingsOverlay').classList.add('open');
+  document.getElementById('aiToken').value = claudeAI.token;
+  claudeAI.updateUI();
+});
+document.getElementById('settingsClose').addEventListener('click', () => {
+  document.getElementById('settingsOverlay').classList.remove('open');
+});
+document.getElementById('settingsOverlay').addEventListener('click', (e) => {
+  if (e.target === document.getElementById('settingsOverlay'))
+    document.getElementById('settingsOverlay').classList.remove('open');
+});
+document.getElementById('aiToken').addEventListener('input', (e) => {
+  claudeAI.token = e.target.value.trim();
+  localStorage.setItem('aiGatewayToken', claudeAI.token);
+});
+document.getElementById('aiToggle').addEventListener('click', () => {
+  claudeAI.enabled = !claudeAI.enabled;
+  localStorage.setItem('aiComposeEnabled', claudeAI.enabled);
+  claudeAI.updateUI();
 });
 
 // Init magic dial
