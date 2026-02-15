@@ -1,0 +1,988 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Musical Painting</title>
+<script src="https://cdn.jsdelivr.net/npm/tone@14.7.77/build/Tone.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a1a; touch-action: none; user-select: none; -webkit-user-select: none; }
+canvas { display: block; width: 100%; height: 100%; }
+#magicDial { position: fixed; bottom: 70px; left: 50%; transform: translateX(-50%); z-index: 11; width: 64px; height: 64px; cursor: pointer; opacity: 0.7; transition: opacity 0.3s; }
+#magicDial:hover { opacity: 1; }
+#magicDial canvas { width: 64px; height: 64px; }
+#styles { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); display: flex; gap: 12px; z-index: 10; opacity: 0.5; transition: opacity 0.3s; }
+#styles:hover, #styles:active { opacity: 1; }
+#styles button { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 50%; width: 40px; height: 40px; font-size: 18px; cursor: pointer; transition: all 0.2s; color: #fff; }
+#styles button.active { border-color: rgba(255,255,255,0.8); background: rgba(255,255,255,0.2); transform: scale(1.15); }
+#tools { position: fixed; top: 16px; right: 16px; display: flex; gap: 8px; z-index: 10; opacity: 0.4; transition: opacity 0.3s; }
+#tools:hover { opacity: 1; }
+#tools button { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; width: 36px; height: 36px; font-size: 16px; cursor: pointer; color: #fff; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="magicDial"><canvas id="dialCanvas" width="128" height="128"></canvas></div>
+<div id="styles">
+  <button class="active" data-style="midnight">🌙</button>
+  <button data-style="neon">🔥</button>
+  <button data-style="ocean">🌊</button>
+  <button data-style="sunset">🌅</button>
+</div>
+<div id="tools">
+  <button id="btnSnap">📷</button>
+  <button id="btnRec">🎵</button>
+</div>
+<script>
+(function() {
+'use strict';
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W, H, cx, cy, radius;
+
+// --- STYLES ---
+const STYLES = {
+  midnight: {
+    bg: [10, 10, 30], bgGrad: 'rgba(20,15,60,0.4)',
+    sweepColor: 'rgba(120,140,255,0.8)', sweepTrail: 'rgba(80,100,200,0.15)',
+    ringColor: 'rgba(80,100,180,0.12)',
+    dotColors: (t) => {
+      if (t < 0.33) return `hsl(${280 + t*60}, 70%, 45%)`;
+      if (t < 0.66) return `hsl(${35 + t*20}, 80%, 55%)`;
+      return `hsl(${180 + t*30}, 70%, 65%)`;
+    },
+    centerColor: 'rgba(100,120,255,0.6)',
+    aiHue: 240,
+    synthMod: { bass: { filterFreq: 400 }, mid: { delayTime: '8n.' }, sparkle: { reverb: 0.6 } }
+  },
+  neon: {
+    bg: [5, 5, 5], bgGrad: 'rgba(20,0,30,0.3)',
+    sweepColor: 'rgba(255,0,200,0.9)', sweepTrail: 'rgba(200,0,150,0.2)',
+    ringColor: 'rgba(255,0,150,0.1)',
+    dotColors: (t) => {
+      if (t < 0.33) return `hsl(${300 + t*60}, 100%, 50%)`;
+      if (t < 0.66) return `hsl(${120 + t*40}, 100%, 50%)`;
+      return `hsl(${180 + t*20}, 100%, 60%)`;
+    },
+    centerColor: 'rgba(255,0,200,0.7)',
+    aiHue: 270,
+    synthMod: { bass: { filterFreq: 600 }, mid: { delayTime: '8n' }, sparkle: { reverb: 0.5 } }
+  },
+  ocean: {
+    bg: [5, 25, 35], bgGrad: 'rgba(0,40,60,0.4)',
+    sweepColor: 'rgba(100,220,255,0.7)', sweepTrail: 'rgba(50,150,200,0.15)',
+    ringColor: 'rgba(80,180,220,0.1)',
+    dotColors: (t) => {
+      if (t < 0.33) return `hsl(${200 + t*30}, 60%, 40%)`;
+      if (t < 0.66) return `hsl(${180 + t*20}, 70%, 55%)`;
+      return `hsl(${190 + t*10}, 80%, 75%)`;
+    },
+    centerColor: 'rgba(80,200,240,0.5)',
+    aiHue: 200,
+    synthMod: { bass: { filterFreq: 300 }, mid: { delayTime: '4n' }, sparkle: { reverb: 0.8 } }
+  },
+  sunset: {
+    bg: [30, 12, 8], bgGrad: 'rgba(60,20,10,0.4)',
+    sweepColor: 'rgba(255,180,80,0.8)', sweepTrail: 'rgba(200,120,50,0.18)',
+    ringColor: 'rgba(200,130,60,0.1)',
+    dotColors: (t) => {
+      if (t < 0.33) return `hsl(${15 + t*20}, 70%, 40%)`;
+      if (t < 0.66) return `hsl(${30 + t*15}, 85%, 55%)`;
+      return `hsl(${40 + t*10}, 90%, 65%)`;
+    },
+    centerColor: 'rgba(255,160,60,0.6)',
+    aiHue: 25,
+    synthMod: { bass: { filterFreq: 350 }, mid: { delayTime: '8n.' }, sparkle: { reverb: 0.5 } }
+  }
+};
+
+let currentStyle = 'midnight';
+let style = STYLES.midnight;
+
+// --- MAGIC DIAL ---
+let magicLevel = 2; // 0-4, maps to levels 1-5, default=2 (level 3 "Rich")
+const MAGIC_LABELS = ['✨','✨✨','✨✨✨','✨✨✨✨','✨✨✨✨✨'];
+const AI_INTERVALS = [Infinity, 20, 8, 4, 2]; // seconds between AI adds
+const DRUM_LEVELS = ['none','subtleKick','kickHat','full','complex'];
+const REVERB_WET = [0.2, 0.3, 0.4, 0.5, 0.6];
+const DELAY_FEEDBACK = [0.1, 0.2, 0.3, 0.4, 0.5];
+
+function drawDial() {
+  const dc = document.getElementById('dialCanvas');
+  const dx = dc.getContext('2d');
+  const s = 128, c = s/2, r = 26;
+  dx.clearRect(0,0,s,s);
+  // glow intensity scales with level
+  const glowAlpha = 0.15 + magicLevel * 0.12;
+  dx.beginPath();
+  dx.arc(c,c,r+8,0,Math.PI*2);
+  const gg = dx.createRadialGradient(c,c,r-4,c,c,r+12);
+  gg.addColorStop(0, `rgba(255,220,100,${glowAlpha})`);
+  gg.addColorStop(1, 'transparent');
+  dx.fillStyle = gg;
+  dx.fill();
+  // background circle
+  dx.beginPath();
+  dx.arc(c,c,r,0,Math.PI*2);
+  dx.fillStyle = `rgba(255,255,255,0.08)`;
+  dx.fill();
+  dx.strokeStyle = `rgba(255,255,255,${0.2 + magicLevel*0.1})`;
+  dx.lineWidth = 2;
+  dx.stroke();
+  // filled arc showing level (0-4 mapped to 0-100%)
+  if (magicLevel > 0) {
+    const startA = -Math.PI/2;
+    const endA = startA + (magicLevel/4) * Math.PI * 2;
+    dx.beginPath();
+    dx.arc(c,c,r,startA,endA);
+    dx.strokeStyle = `rgba(255,220,100,${0.5 + magicLevel*0.1})`;
+    dx.lineWidth = 3;
+    dx.stroke();
+  }
+  // level number
+  dx.font = 'bold 18px -apple-system, sans-serif';
+  dx.textAlign = 'center';
+  dx.textBaseline = 'middle';
+  dx.fillStyle = `rgba(255,255,255,${0.6 + magicLevel*0.1})`;
+  dx.fillText(magicLevel+1, c, c-2);
+  // stars below number
+  dx.font = '8px sans-serif';
+  dx.fillText('✨'.repeat(magicLevel+1).substring(0,(magicLevel+1)*2), c, c+14);
+}
+
+document.getElementById('magicDial').addEventListener('pointerdown', (e) => {
+  e.stopPropagation();
+  e.preventDefault();
+  magicLevel = (magicLevel + 1) % 5;
+  drawDial();
+  applyMagicLevel();
+});
+
+function applyMagicLevel() {
+  if (!audioStarted) return;
+  if (masterReverb) masterReverb.wet.value = REVERB_WET[magicLevel];
+  if (midDelay) midDelay.feedback.value = DELAY_FEEDBACK[magicLevel];
+  if (sparkleReverb) sparkleReverb.wet.value = Math.min(0.9, REVERB_WET[magicLevel] + 0.1);
+  updateDrums();
+}
+
+// Drum system
+let drumSynth = null, drumHat = null, drumLoop = null;
+function initDrums() {
+  if (drumSynth) return;
+  drumSynth = new Tone.MembraneSynth({ pitchDecay: 0.05, octaves: 4, envelope: { attack: 0.001, decay: 0.2, sustain: 0, release: 0.3 }}).connect(masterComp);
+  drumSynth.volume.value = -18;
+  drumHat = new Tone.NoiseSynth({ noise: { type: 'white' }, envelope: { attack: 0.001, decay: 0.08, sustain: 0, release: 0.05 }}).connect(masterComp);
+  drumHat.volume.value = -22;
+}
+
+let drumPlaying = false;
+function updateDrums() {
+  if (!audioStarted || !drumSynth) return;
+  const level = DRUM_LEVELS[magicLevel];
+  if (level === 'none') {
+    if (drumLoop) { drumLoop.stop(); drumLoop.dispose(); drumLoop = null; drumPlaying = false; }
+    return;
+  }
+  if (drumLoop) { drumLoop.stop(); drumLoop.dispose(); drumLoop = null; }
+  let pattern;
+  if (level === 'subtleKick') {
+    pattern = (time, note) => { if (note === 'k') drumSynth.triggerAttackRelease('C1', '8n', time, 0.3); };
+    drumLoop = new Tone.Sequence(pattern, ['k',null,null,null,'k',null,null,null], '8n');
+  } else if (level === 'kickHat') {
+    pattern = (time, note) => {
+      if (note === 'k') drumSynth.triggerAttackRelease('C1', '8n', time, 0.5);
+      if (note === 'h') drumHat.triggerAttackRelease('16n', time, 0.2);
+    };
+    drumLoop = new Tone.Sequence(pattern, ['k','h',null,'h','k','h',null,'h'], '8n');
+  } else if (level === 'full') {
+    pattern = (time, note) => {
+      if (note === 'k') drumSynth.triggerAttackRelease('C1', '8n', time, 0.6);
+      if (note === 'h') drumHat.triggerAttackRelease('16n', time, 0.3);
+    };
+    drumLoop = new Tone.Sequence(pattern, ['k','h','h','h','k','h','k','h'], '8n');
+  } else { // complex
+    pattern = (time, note) => {
+      if (note === 'k') drumSynth.triggerAttackRelease('C1', '8n', time, 0.7);
+      if (note === 'h') drumHat.triggerAttackRelease('16n', time, 0.35);
+      if (note === 'H') drumHat.triggerAttackRelease('16n', time, 0.5);
+    };
+    drumLoop = new Tone.Sequence(pattern, ['k','h','H','h','k','H','k','h','h','H','k','h','k','h','H','h'], '16n');
+  }
+  drumLoop.start(0);
+  if (!drumPlaying) { Tone.Transport.bpm.value = BPM; Tone.Transport.start(); drumPlaying = true; }
+}
+
+// --- MUSICAL GRID CONSTANTS ---
+const BEAT_ANGLE = (Math.PI * 2) / 16;        // 22.5 degrees per beat (16 beats = 4 bars)
+const EIGHTH_ANGLE = BEAT_ANGLE / 2;           // 11.25 degrees
+const SIXTEENTH_ANGLE = BEAT_ANGLE / 4;        // 5.625 degrees
+
+function snapAngleToGrid(angle, subdivision) {
+  // subdivision: 'beat', '8th', '16th'
+  const step = subdivision === '16th' ? SIXTEENTH_ANGLE : subdivision === '8th' ? EIGHTH_ANGLE : BEAT_ANGLE;
+  return Math.round(angle / step) * step;
+}
+
+// Scale-aware distance mapping: given a base normDist, find the normDist for a scale interval
+// Intervals: 0=unison, 1=minor third, 2=fourth, 3=fifth, 4=minor seventh
+// Each scale degree spans about 2.4 semitones in the mapping, total 36 semitones over 0-1
+const SCALE_INTERVALS_SEMI = [0, 3, 5, 7, 10, 12]; // m3, 4th, 5th, m7, octave
+function distForInterval(baseDist, intervalIndex) {
+  const semiOffset = SCALE_INTERVALS_SEMI[intervalIndex];
+  const nd = baseDist + semiOffset / 36;
+  return Math.max(0.05, Math.min(0.95, nd));
+}
+function distForBass(angle) {
+  // Bass zone: inner third (normDist 0.08-0.25), snap to scale
+  return 0.08 + (Math.abs(Math.sin(angle * 3)) * 0.15); // deterministic but varied
+}
+
+// --- GROWTH SYSTEM ---
+// Growth replaces the old magicSpawnDots instant-spawn approach.
+// Compositions grow organically over sweeps based on magic level.
+let growthQueue = [];
+let growthProcessing = false;
+
+// Find dots near a position
+function findNearbyDots(px, py, radiusPx) {
+  return dots.filter(d => {
+    if (d.removing) return false;
+    const dx = d.x - px, dy = d.y - py;
+    return Math.sqrt(dx*dx + dy*dy) < radiusPx;
+  });
+}
+
+// Find lonely dots (no neighbors within ~40px)
+function findLonelyDots() {
+  const active = dots.filter(d => !d.removing);
+  return active.filter(d => {
+    const neighbors = active.filter(o => {
+      if (o === d) return false;
+      const dx = o.x - d.x, dy = o.y - d.y;
+      return Math.sqrt(dx*dx + dy*dy) < 50;
+    });
+    return neighbors.length === 0;
+  });
+}
+
+// Find empty beat positions (16 beats around circle)
+function findEmptyBeats() {
+  const active = dots.filter(d => !d.removing);
+  const occupied = new Set();
+  active.forEach(d => {
+    const beatIndex = Math.round(((d.angle + Math.PI) / (Math.PI * 2)) * 16) % 16;
+    occupied.add(beatIndex);
+  });
+  const empty = [];
+  for (let i = 0; i < 16; i++) {
+    if (!occupied.has(i)) empty.push(i);
+  }
+  return empty;
+}
+
+// Find high dots (outer ring) that lack bass anchors
+function findDotsNeedingBass() {
+  const active = dots.filter(d => !d.removing);
+  return active.filter(d => {
+    if (d.normDist < 0.5) return false; // already in lower half
+    // Check if there's a bass dot at similar angle
+    const hasBass = active.some(o => {
+      if (o === d) return false;
+      return o.normDist < 0.3 && angleDiff(o.angle, d.angle) < BEAT_ANGLE;
+    });
+    return !hasBass;
+  });
+}
+
+// Find consecutive dot sequences for chain fills
+function findChainOpportunities() {
+  const active = dots.filter(d => !d.removing);
+  // Sort by angle
+  const sorted = [...active].sort((a,b) => a.angle - b.angle);
+  const chains = [];
+  for (let i = 0; i < sorted.length - 2; i++) {
+    const d1 = sorted[i], d2 = sorted[i+1], d3 = sorted[i+2];
+    const gap12 = angleDiff(d2.angle, d1.angle);
+    const gap23 = angleDiff(d3.angle, d2.angle);
+    // If roughly evenly spaced at 16th or 8th intervals
+    if (gap12 < EIGHTH_ANGLE * 1.5 && Math.abs(gap12 - gap23) < SIXTEENTH_ANGLE) {
+      // Suggest continuing the chain
+      const nextAngle = d3.angle + gap12;
+      const avgDist = (d1.normDist + d2.normDist + d3.normDist) / 3;
+      chains.push({ angle: nextAngle, normDist: avgDist });
+    }
+  }
+  return chains;
+}
+
+function addGrowthDot(angle, normDist, isAI) {
+  const nd = Math.max(0.05, Math.min(0.95, normDist));
+  const px = cx + Math.cos(angle) * nd * radius;
+  const py = cy + Math.sin(angle) * nd * radius;
+
+  let color;
+  if (isAI) {
+    const hue = style.aiHue + (Math.random() - 0.5) * 20;
+    color = `hsl(${hue}, 60%, 45%)`;
+  } else {
+    color = style.dotColors(nd);
+  }
+
+  const dot = {
+    x: px, y: py, angle, dist: nd * radius, normDist: nd,
+    color, size: (5 + Math.random() * 3), // slightly smaller than user dots
+    isAI, synthZone: getSynthZone(nd),
+    pulse: 0, alpha: 0, // starts invisible, fades in
+    targetAlpha: isAI ? 0.6 : 0.7,
+    triggered: false, removing: false, removeAlpha: 1,
+    isGrowth: true, growthFadeIn: 0, growthSparkle: 1.0
+  };
+  dots.push(dot);
+  return dot;
+}
+
+function processGrowthQueue() {
+  if (growthQueue.length === 0) { growthProcessing = false; return; }
+  growthProcessing = true;
+  const item = growthQueue.shift();
+  addGrowthDot(item.angle, item.normDist, item.isAI || false);
+  setTimeout(() => processGrowthQueue(), 200);
+}
+
+function generateGrowth() {
+  const active = dots.filter(d => !d.removing);
+  if (active.length === 0) return;
+
+  const clamp = (d) => Math.max(0.05, Math.min(0.95, d));
+  const queue = [];
+
+  // --- System growth (non-AI) ---
+  let systemDotsToAdd = 0;
+  let systemInterval = Infinity; // sweeps between system growth
+
+  if (magicLevel === 0) return; // Level 1: no growth
+  if (magicLevel === 1) { systemDotsToAdd = 1; systemInterval = 3; }
+  if (magicLevel === 2) { systemDotsToAdd = 1 + Math.floor(Math.random() * 2); systemInterval = 2; }
+  if (magicLevel === 3) { systemDotsToAdd = 1 + Math.floor(Math.random() * 2); systemInterval = 1; }
+  if (magicLevel === 4) { systemDotsToAdd = 2 + Math.floor(Math.random() * 2); systemInterval = 1; }
+
+  if (sweepCount % systemInterval !== 0) systemDotsToAdd = 0;
+
+  for (let i = 0; i < systemDotsToAdd; i++) {
+    const roll = Math.random();
+    const lonely = findLonelyDots();
+    const needsBass = findDotsNeedingBass();
+    const emptyBeats = findEmptyBeats();
+
+    if (needsBass.length > 0 && roll < 0.35) {
+      // Bass anchor
+      const target = needsBass[Math.floor(Math.random() * needsBass.length)];
+      queue.push({ angle: target.angle, normDist: clamp(distForBass(target.angle)), isAI: false });
+    } else if (lonely.length > 0 && roll < 0.65) {
+      // Harmony next to a lonely dot
+      const target = lonely[Math.floor(Math.random() * lonely.length)];
+      const interval = [1, 3][Math.floor(Math.random() * 2)]; // third or fifth
+      queue.push({ angle: target.angle, normDist: clamp(distForInterval(target.normDist, interval)), isAI: false });
+    } else if (emptyBeats.length > 0) {
+      // Fill a rhythmic gap
+      const beat = emptyBeats[Math.floor(Math.random() * emptyBeats.length)];
+      const beatAngle = (beat / 16) * Math.PI * 2 - Math.PI;
+      // Pick a pitch near existing dots' average
+      let avgDist = 0;
+      active.forEach(d => avgDist += d.normDist);
+      avgDist /= active.length;
+      const nd = clamp(avgDist + (Math.random() - 0.5) * 0.2);
+      queue.push({ angle: beatAngle, normDist: nd, isAI: false });
+    }
+
+    // Level 4+: arpeggios and octave doubles
+    if (magicLevel >= 3 && Math.random() < 0.3) {
+      const src = active[Math.floor(Math.random() * active.length)];
+      // Arpeggio: dot one 16th after existing
+      queue.push({ angle: src.angle + SIXTEENTH_ANGLE, normDist: clamp(distForInterval(src.normDist, 1)), isAI: false });
+    }
+    if (magicLevel >= 3 && Math.random() < 0.2) {
+      const src = active[Math.floor(Math.random() * active.length)];
+      // Octave double
+      queue.push({ angle: src.angle, normDist: clamp(distForInterval(src.normDist, 5)), isAI: false });
+    }
+  }
+
+  // Level 4+: drum dots in innermost ring
+  if (magicLevel >= 3 && sweepCount % 2 === 0) {
+    const drumBeats = magicLevel >= 4 ? [0, 4, 8, 12] : [0, 8];
+    const existingDrums = active.filter(d => d.normDist < 0.08);
+    if (existingDrums.length < drumBeats.length) {
+      const beat = drumBeats[existingDrums.length];
+      const beatAngle = (beat / 16) * Math.PI * 2 - Math.PI;
+      queue.push({ angle: beatAngle, normDist: 0.04 + Math.random() * 0.03, isAI: false });
+    }
+  }
+
+  // Level 5: chain fills
+  if (magicLevel >= 4) {
+    const chains = findChainOpportunities();
+    if (chains.length > 0) {
+      const c = chains[Math.floor(Math.random() * chains.length)];
+      queue.push({ angle: c.angle, normDist: clamp(c.normDist), isAI: false });
+    }
+  }
+
+  // --- AI growth ---
+  let aiDotsToAdd = 0;
+  let aiInterval = Infinity;
+
+  if (magicLevel === 2) { aiInterval = 4; aiDotsToAdd = 1; }
+  if (magicLevel === 3) { aiInterval = 2; aiDotsToAdd = 1; }
+  if (magicLevel === 4) { aiInterval = 1; aiDotsToAdd = 1 + Math.floor(Math.random() * 2); }
+
+  if (sweepCount % aiInterval === 0 && sweepCount > 0) {
+    for (let i = 0; i < aiDotsToAdd; i++) {
+      const emptyBeats = findEmptyBeats();
+      if (emptyBeats.length > 0) {
+        const beat = emptyBeats[Math.floor(Math.random() * emptyBeats.length)];
+        const beatAngle = (beat / 16) * Math.PI * 2 - Math.PI;
+        // Complementary pitch (opposite of average)
+        let avgDist = 0;
+        active.forEach(d => avgDist += d.normDist);
+        avgDist /= active.length;
+        const nd = clamp(1 - avgDist + (Math.random() - 0.5) * 0.15);
+        queue.push({ angle: beatAngle, normDist: nd, isAI: true });
+      } else {
+        // Counter-melody: opposite side
+        const src = active[Math.floor(Math.random() * active.length)];
+        queue.push({ angle: src.angle + Math.PI, normDist: clamp(1 - src.normDist), isAI: true });
+      }
+    }
+  }
+
+  // Add to growth queue and start processing
+  growthQueue.push(...queue);
+  if (!growthProcessing && growthQueue.length > 0) {
+    processGrowthQueue();
+  }
+}
+
+// Consolidation: enrich an existing dot instead of adding a new one
+function enrichDot(dot) {
+  dot.size = Math.min(dot.size * 1.2, 18);
+  dot.alpha = Math.min((dot.targetAlpha || dot.alpha) + 0.15, 1.0);
+  dot.targetAlpha = dot.alpha;
+  dot.pulse = 1.0; // flash
+  // Add harmony if none exists nearby
+  const nearby = findNearbyDots(dot.x, dot.y, 50);
+  const hasHarmony = nearby.some(d => d !== dot && angleDiff(d.angle, dot.angle) < BEAT_ANGLE);
+  if (!hasHarmony && magicLevel >= 1) {
+    const interval = [1, 3][Math.floor(Math.random() * 2)];
+    const nd = Math.max(0.05, Math.min(0.95, distForInterval(dot.normDist, interval)));
+    addGrowthDot(dot.angle, nd, false);
+  }
+}
+
+// --- MINOR PENTATONIC SCALE ---
+// C minor pentatonic: C Eb F G Bb
+const SCALE_SEMITONES = [0, 3, 5, 7, 10];
+function distanceToNote(normDist) {
+  // normDist 0=center(low), 1=edge(high)
+  // Map to octaves 2-5
+  const totalSemitones = normDist * 36; // 3 octaves range
+  const octave = Math.floor(totalSemitones / 12) + 2;
+  const degree = Math.floor((totalSemitones % 12) / 2.4);
+  const semitone = SCALE_SEMITONES[Math.min(degree, 4)];
+  const notes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+  return notes[semitone] + octave;
+}
+
+function getSynthZone(normDist) {
+  if (normDist < 0.33) return 'bass';
+  if (normDist < 0.66) return 'mid';
+  return 'sparkle';
+}
+
+// --- DOTS ---
+let dots = [];
+let ripples = [];
+
+// --- AUDIO ---
+let audioStarted = false;
+let bassSynth, midSynth, sparkleSynth;
+let masterReverb, masterComp, masterLimiter;
+let bassFilter, midDelay, sparkleChorus, sparkleReverb;
+let mediaRecorder = null, recordedChunks = [];
+
+function initAudio() {
+  if (audioStarted) return;
+  audioStarted = true;
+  Tone.start();
+
+  masterLimiter = new Tone.Limiter(-2).toDestination();
+  masterComp = new Tone.Compressor(-20, 4).connect(masterLimiter);
+  masterReverb = new Tone.Reverb({ decay: 2.5, wet: 0.3 }).connect(masterComp);
+  masterReverb.generate();
+
+  // Bass
+  bassFilter = new Tone.Filter(400, 'lowpass').connect(masterReverb);
+  bassSynth = new Tone.MonoSynth({
+    oscillator: { type: 'triangle' },
+    envelope: { attack: 0.05, decay: 0.3, sustain: 0.4, release: 0.8 },
+    filterEnvelope: { attack: 0.02, decay: 0.2, sustain: 0.3, release: 0.5, baseFrequency: 100, octaves: 2 }
+  }).connect(bassFilter);
+  bassSynth.volume.value = -8;
+
+  // Mid
+  midDelay = new Tone.PingPongDelay('8n.', 0.3).connect(masterReverb);
+  midDelay.wet.value = 0.25;
+  midSynth = new Tone.PolySynth(Tone.Synth, {
+    oscillator: { type: 'fatsawtooth', count: 2, spread: 20 },
+    envelope: { attack: 0.08, decay: 0.3, sustain: 0.3, release: 1.0 }
+  }).connect(midDelay);
+  midSynth.volume.value = -12;
+
+  // Sparkle
+  sparkleReverb = new Tone.Reverb({ decay: 4, wet: 0.6 }).connect(masterComp);
+  sparkleReverb.generate();
+  sparkleChorus = new Tone.Chorus(4, 2.5, 0.5).connect(sparkleReverb);
+  sparkleChorus.start();
+  sparkleSynth = new Tone.FMSynth({
+    harmonicity: 8,
+    modulationIndex: 12,
+    envelope: { attack: 0.01, decay: 0.2, sustain: 0.1, release: 2.0 },
+    modulation: { type: 'sine' }
+  }).connect(sparkleChorus);
+  sparkleSynth.volume.value = -14;
+
+  initDrums();
+  applyMagicLevel();
+  updateDrums();
+}
+
+function playDot(dot) {
+  if (!audioStarted) return;
+  const note = distanceToNote(dot.normDist);
+  try {
+    if (dot.synthZone === 'bass') {
+      bassSynth.triggerAttackRelease(note, '8n');
+    } else if (dot.synthZone === 'mid') {
+      midSynth.triggerAttackRelease(note, '8n');
+    } else {
+      sparkleSynth.triggerAttackRelease(note, '4n');
+    }
+  } catch(e) {}
+}
+
+// --- SWEEP ---
+const BPM = 120;
+const LOOP_DURATION = (4 * 4 * 60) / BPM; // 4 bars in seconds = 8s
+const SWEEP_SPEED = (Math.PI * 2) / LOOP_DURATION; // radians per second
+let sweepAngle = -Math.PI / 2; // start at top
+const HIT_THRESHOLD = 0.06; // radians (~3.4 degrees) — wide enough to trigger same-beat dots together
+let lastTime = 0;
+let firstTouch = false;
+let paintTextAlpha = 1;
+let sweepCount = 0;
+let lastSweepAngle = sweepAngle;
+
+// --- AI JAM PARTNER ---
+let emptyTimer = 0;
+
+function aiUpdate(dt) {
+  const allActive = dots.filter(d => !d.removing);
+  if (allActive.length === 0) {
+    emptyTimer += dt;
+    if (emptyTimer > 10) {
+      const angle = Math.random() * Math.PI * 2;
+      const dist = 0.3 + Math.random() * 0.3;
+      addDot(cx + Math.cos(angle) * dist * radius, cy + Math.sin(angle) * dist * radius, true);
+      emptyTimer = 0;
+    }
+    return;
+  }
+  emptyTimer = 0;
+}
+
+// --- DOT MANAGEMENT ---
+function addDot(px, py, isAI) {
+  const dx = px - cx, dy = py - cy;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  if (dist > radius) return null;
+  const normDist = dist / radius;
+  const angle = Math.atan2(dy, dx);
+  const synthZone = getSynthZone(normDist);
+
+  let color;
+  if (isAI) {
+    const hue = style.aiHue + (Math.random() - 0.5) * 20;
+    color = `hsl(${hue}, 60%, 45%)`;
+  } else {
+    color = style.dotColors(normDist);
+  }
+
+  const dot = {
+    x: px, y: py, angle, dist, normDist,
+    color, size: isAI ? (6 + Math.random() * 4) : (8 + Math.random() * 6),
+    isAI, synthZone,
+    pulse: 0, alpha: isAI ? 0.6 : 0.9,
+    targetAlpha: isAI ? 0.6 : 0.9,
+    triggered: false, removing: false, removeAlpha: 1,
+    isGrowth: false, growthFadeIn: 1, growthSparkle: 0
+  };
+  dots.push(dot);
+  return dot;
+}
+
+// --- RESIZE ---
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  cx = W / 2; cy = H / 2;
+  radius = Math.min(W, H) * 0.44;
+  // Recalc dot positions relative to center
+  dots.forEach(d => {
+    const dx = d.x - cx, dy = d.y - cy;
+    d.dist = Math.sqrt(dx*dx + dy*dy);
+    d.normDist = d.dist / radius;
+    d.angle = Math.atan2(dy, dx);
+  });
+}
+window.addEventListener('resize', resize);
+resize();
+
+// --- RENDERING ---
+function normalizeAngle(a) {
+  while (a < -Math.PI) a += Math.PI * 2;
+  while (a > Math.PI) a -= Math.PI * 2;
+  return a;
+}
+
+function angleDiff(a, b) {
+  return Math.abs(normalizeAngle(a - b));
+}
+
+function draw(timestamp) {
+  const dt = lastTime ? (timestamp - lastTime) / 1000 : 0.016;
+  lastTime = timestamp;
+
+  // Update sweep
+  const prevAngle = sweepAngle;
+  sweepAngle += SWEEP_SPEED * dt;
+  if (sweepAngle > Math.PI) {
+    if (prevAngle <= Math.PI) {
+      sweepCount++;
+      // Trigger growth system on sweep completion
+      if (dots.filter(d => !d.removing).length > 0) {
+        generateGrowth();
+      }
+    }
+    sweepAngle -= Math.PI * 2;
+  }
+
+  // AI update (now only handles empty-canvas starter dots)
+  aiUpdate(dt);
+
+  // Clear
+  const [br, bg, bb] = style.bg;
+  ctx.fillStyle = `rgb(${br},${bg},${bb})`;
+  ctx.fillRect(0, 0, W, H);
+
+  // Background radial gradient
+  const bgGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
+  bgGrad.addColorStop(0, style.bgGrad);
+  bgGrad.addColorStop(1, 'transparent');
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, W, H);
+
+  // Radar rings
+  ctx.strokeStyle = style.ringColor;
+  ctx.lineWidth = 1;
+  [0.33, 0.66, 1.0].forEach(r => {
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius * r, 0, Math.PI * 2);
+    ctx.stroke();
+  });
+
+  // Sweep trail (afterglow)
+  const trailCount = 30;
+  for (let i = trailCount; i >= 0; i--) {
+    const trailAngle = sweepAngle - (i / trailCount) * 0.5;
+    const alpha = (1 - i / trailCount) * 0.08;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + Math.cos(trailAngle) * radius, cy + Math.sin(trailAngle) * radius);
+    ctx.strokeStyle = style.sweepTrail.replace(/[\d.]+\)$/, alpha + ')');
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  // Sweep beam
+  ctx.beginPath();
+  ctx.moveTo(cx, cy);
+  ctx.lineTo(cx + Math.cos(sweepAngle) * radius, cy + Math.sin(sweepAngle) * radius);
+  ctx.strokeStyle = style.sweepColor;
+  ctx.lineWidth = 2;
+  ctx.shadowColor = style.sweepColor;
+  ctx.shadowBlur = 15;
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  // Center pulsing circle
+  const breathe = 0.7 + 0.3 * Math.sin(timestamp / 1000 * Math.PI * 2 * (BPM / 60));
+  ctx.beginPath();
+  ctx.arc(cx, cy, 6 * breathe, 0, Math.PI * 2);
+  ctx.fillStyle = style.centerColor;
+  ctx.fill();
+
+  // "PAINT MUSIC" text
+  if (paintTextAlpha > 0.01) {
+    ctx.font = '600 16px -apple-system, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = `rgba(200,200,220,${paintTextAlpha * 0.6})`;
+    ctx.fillText('PAINT MUSIC', cx, cy + 24);
+    if (firstTouch) paintTextAlpha *= 0.95;
+  }
+
+  // Trigger detection & dot rendering
+  dots.forEach(dot => {
+    if (dot.removing) {
+      dot.removeAlpha -= dt * 2;
+      if (dot.removeAlpha <= 0) { dot.dead = true; return; }
+    }
+
+    // Trigger check
+    const diff = angleDiff(sweepAngle, dot.angle);
+    if (diff < HIT_THRESHOLD && !dot.triggered && !dot.removing) {
+      dot.triggered = true;
+      dot.pulse = 1;
+      playDot(dot);
+      ripples.push({ x: dot.x, y: dot.y, r: dot.size, maxR: dot.size + 30, alpha: 0.6, color: dot.color });
+      // Level 5 cascade: trigger nearby dots slightly
+      if (magicLevel >= 4) {
+        dots.forEach(other => {
+          if (other === dot || other.removing || other.triggered) return;
+          const odx = other.x - dot.x, ody = other.y - dot.y;
+          if (Math.sqrt(odx*odx+ody*ody) < 50) {
+            other.pulse = Math.min(other.pulse + 0.4, 1);
+            try { playDot(other); } catch(e) {}
+          }
+        });
+      }
+    }
+    if (diff > HIT_THRESHOLD * 3) {
+      dot.triggered = false;
+    }
+
+    // Pulse decay
+    if (dot.pulse > 0) dot.pulse *= 0.92;
+
+    // Growth fade-in (0 → targetAlpha over ~500ms)
+    if (dot.isGrowth && dot.growthFadeIn < 1) {
+      dot.growthFadeIn = Math.min(1, dot.growthFadeIn + dt * 2); // ~500ms
+      dot.alpha = (dot.targetAlpha || 0.7) * dot.growthFadeIn;
+    }
+    // Sparkle decay
+    if (dot.growthSparkle > 0) dot.growthSparkle = Math.max(0, dot.growthSparkle - dt * 1.5);
+
+    // Draw dot
+    const effectiveAlpha = (dot.removing ? dot.removeAlpha : dot.alpha) * (0.5 + dot.pulse * 0.5);
+    const effectiveSize = dot.size * (1 + dot.pulse * 0.4);
+
+    // Glow
+    ctx.beginPath();
+    ctx.arc(dot.x, dot.y, effectiveSize * 2, 0, Math.PI * 2);
+    const glowGrad = ctx.createRadialGradient(dot.x, dot.y, 0, dot.x, dot.y, effectiveSize * 2);
+    glowGrad.addColorStop(0, dot.color.replace(')', `,${effectiveAlpha * 0.3})`).replace('hsl', 'hsla'));
+    glowGrad.addColorStop(1, 'transparent');
+    ctx.fillStyle = glowGrad;
+    ctx.fill();
+
+    // Core
+    ctx.beginPath();
+    ctx.arc(dot.x, dot.y, effectiveSize, 0, Math.PI * 2);
+    ctx.fillStyle = dot.color.replace(')', `,${effectiveAlpha})`).replace('hsl', 'hsla');
+    ctx.fill();
+
+    // Sparkle effect for newly grown dots
+    if (dot.growthSparkle > 0) {
+      const sparkAlpha = dot.growthSparkle * 0.8;
+      const sparkSize = effectiveSize * (1.5 + dot.growthSparkle);
+      ctx.beginPath();
+      ctx.arc(dot.x, dot.y, sparkSize, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(255,255,220,${sparkAlpha})`;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      // Tiny sparkle points
+      for (let s = 0; s < 3; s++) {
+        const sa = (timestamp / 300 + s * 2.1) % (Math.PI * 2);
+        const sr = sparkSize * (1.2 + Math.sin(timestamp / 200 + s) * 0.3);
+        ctx.beginPath();
+        ctx.arc(dot.x + Math.cos(sa) * sr, dot.y + Math.sin(sa) * sr, 1.5 * dot.growthSparkle, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(255,255,255,${sparkAlpha * 0.6})`;
+        ctx.fill();
+      }
+    }
+  });
+
+  // Remove dead dots
+  dots = dots.filter(d => !d.dead);
+
+  // Ripples
+  ripples.forEach(r => {
+    r.r += dt * 80;
+    r.alpha -= dt * 1.5;
+    if (r.alpha <= 0) return;
+    ctx.beginPath();
+    ctx.arc(r.x, r.y, r.r, 0, Math.PI * 2);
+    ctx.strokeStyle = r.color.replace(')', `,${r.alpha})`).replace('hsl', 'hsla');
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  });
+  ripples = ripples.filter(r => r.alpha > 0);
+
+  requestAnimationFrame(draw);
+}
+
+// --- INPUT ---
+let pointerDown = false;
+let longPressTimer = null;
+let dragDots = 0;
+let lastDragDot = 0;
+
+function handleStart(px, py) {
+  if (!firstTouch) { firstTouch = true; initAudio(); }
+
+  // Double-tap center to clear
+  const dcx = px - cx, dcy = py - cy;
+  if (Math.sqrt(dcx*dcx + dcy*dcy) < 30) {
+    dots.forEach(d => d.removing = true);
+    return;
+  }
+
+  // Check if long-press on existing dot
+  const hitDot = dots.find(d => {
+    const dx = px - d.x, dy = py - d.y;
+    return Math.sqrt(dx*dx + dy*dy) < d.size + 5 && !d.removing;
+  });
+
+  if (hitDot) {
+    longPressTimer = setTimeout(() => {
+      hitDot.removing = true;
+      longPressTimer = null;
+    }, 500);
+  }
+
+  pointerDown = true;
+  dragDots = 0;
+
+  if (!hitDot) {
+    // Consolidation: check if tapping near an existing dot (within 15px)
+    const nearbyDot = dots.find(d => {
+      if (d.removing) return false;
+      const ddx = px - d.x, ddy = py - d.y;
+      return Math.sqrt(ddx*ddx + ddy*ddy) < 15;
+    });
+
+    if (nearbyDot) {
+      // Enrich existing dot instead of adding new one
+      enrichDot(nearbyDot);
+    } else {
+      // Place user's dot
+      const placed = addDot(px, py, false);
+      if (placed && magicLevel >= 1) {
+        // Add at most 1 harmony dot (a third or fifth, same angle, different distance)
+        const interval = Math.random() < 0.5 ? 1 : 3; // third or fifth
+        const harmDist = Math.max(0.05, Math.min(0.95, distForInterval(placed.normDist, interval)));
+        addGrowthDot(placed.angle, harmDist, false);
+      }
+    }
+    dragDots++;
+    lastDragDot = Date.now();
+  }
+}
+
+function handleMove(px, py) {
+  if (!pointerDown) return;
+  if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+  const now = Date.now();
+  if (now - lastDragDot > 60) { // throttle drag dots
+    addDot(px, py, false);
+    dragDots++;
+    lastDragDot = now;
+  }
+}
+
+function handleEnd() {
+  pointerDown = false;
+  if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+}
+
+canvas.addEventListener('pointerdown', e => { e.preventDefault(); handleStart(e.clientX, e.clientY); });
+canvas.addEventListener('pointermove', e => { e.preventDefault(); handleMove(e.clientX, e.clientY); });
+canvas.addEventListener('pointerup', e => { e.preventDefault(); handleEnd(); });
+canvas.addEventListener('pointercancel', e => { e.preventDefault(); handleEnd(); });
+
+// --- STYLE PICKER ---
+document.querySelectorAll('#styles button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#styles button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentStyle = btn.dataset.style;
+    style = STYLES[currentStyle];
+    // Recolor existing user dots
+    dots.forEach(d => {
+      if (!d.isAI) d.color = style.dotColors(d.normDist);
+      else {
+        const hue = style.aiHue + (Math.random()-0.5)*20;
+        d.color = `hsl(${hue}, 60%, 45%)`;
+      }
+    });
+  });
+});
+
+// --- SAVE ---
+document.getElementById('btnSnap').addEventListener('click', () => {
+  const link = document.createElement('a');
+  link.download = 'musical-painting.png';
+  link.href = canvas.toDataURL('image/png');
+  link.click();
+});
+
+document.getElementById('btnRec').addEventListener('click', () => {
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    mediaRecorder.stop();
+    return;
+  }
+  const dest = Tone.context.createMediaStreamDestination();
+  Tone.Destination.connect(dest);
+  recordedChunks = [];
+  mediaRecorder = new MediaRecorder(dest.stream, { mimeType: 'audio/webm' });
+  mediaRecorder.ondataavailable = e => { if (e.data.size) recordedChunks.push(e.data); };
+  mediaRecorder.onstop = () => {
+    const blob = new Blob(recordedChunks, { type: 'audio/webm' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.download = 'musical-painting.webm';
+    a.href = url;
+    a.click();
+    Tone.Destination.disconnect(dest);
+  };
+  mediaRecorder.start();
+  // Auto-stop after one loop
+  setTimeout(() => { if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop(); }, LOOP_DURATION * 1000);
+});
+
+// Init magic dial
+drawDial();
+
+// Start render loop
+requestAnimationFrame(draw);
+
+})();
+</script>
+</body>
+</html>
