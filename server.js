@@ -2,8 +2,19 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const server = http.createServer((req, res) => {
-  let filePath = req.url === '/' ? '/index.html' : req.url;
-  filePath = path.join(__dirname, filePath);
+  let reqPath;
+  try {
+    reqPath = decodeURIComponent(req.url.split('#')[0].split('?')[0]);
+  } catch (e) {
+    res.writeHead(400); res.end('Bad request'); return;
+  }
+  if (reqPath === '/') reqPath = '/index.html';
+  if (reqPath.indexOf('\0') !== -1) { res.writeHead(403); res.end('Forbidden'); return; }
+  const root = path.resolve(__dirname);
+  const filePath = path.resolve(root, '.' + reqPath);
+  if (filePath !== root && !filePath.startsWith(root + path.sep)) {
+    res.writeHead(403); res.end('Forbidden'); return;
+  }
   const ext = path.extname(filePath);
   const types = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.png': 'image/png' };
   fs.readFile(filePath, (err, data) => {
